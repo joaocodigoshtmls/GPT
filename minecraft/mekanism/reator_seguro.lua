@@ -1,11 +1,11 @@
--- Reator Seguro v1.1 - Minecraft 1.20.1 / Mekanism 10.4 / CC:Tweaked
+-- Reator Seguro v1.2 - Minecraft 1.20.1 / Mekanism 10.4 / CC:Tweaked
 -- Monitor de seguranca. NUNCA liga o reator automaticamente.
 -- Requer um Fission Reactor Logic Adapter conectado ao computador.
 -- Use um Logic Adapter independente de seguranca como protecao adicional.
 
 local CFG = {
   temp_max_c = 450,
-  coolant_min = 0.25,
+  coolant_min = 0.10, -- protecao inicial; 20% e o nivel observado no teste
   heated_max = 0.90,
   waste_max = 0.85,
   interval = 0.2
@@ -79,7 +79,7 @@ local function log(reason)
   end)
 end
 
-local locked, data, scramOK = nil, nil, true
+local locked, data, scramOK, scramError = nil, nil, true, nil
 
 while true do
   local ok, result = pcall(read)
@@ -97,15 +97,30 @@ while true do
     end
   end
 
+  -- O comando scram() do Mekanism falha quando o reator JA esta desligado.
+  -- Evita o falso aviso de falha nesses casos.
   if locked then
-    scramOK = pcall(function() reactor.scram() end)
+    scramError = nil
+    if data and not data.on then
+      scramOK = true
+    else
+      local sent, err = pcall(function() reactor.scram() end)
+      if sent then
+        scramOK = true
+      else
+        -- Caso tenha desligado entre a leitura e o comando, confirmar o estado.
+        local statusOK, status = pcall(function() return reactor.getStatus() end)
+        scramOK = statusOK and status == false
+        if not scramOK then scramError = tostring(err) end
+      end
+    end
   end
 
   term.setBackgroundColor(colors.black)
   term.setTextColor(colors.white)
   term.clear()
   term.setCursorPos(1, 1)
-  print("=== REATOR SEGURO v1.1 ===")
+  print("=== REATOR SEGURO v1.2 ===")
 
   if data then
     print("Estado: " .. (data.on and "LIGADO" or "DESLIGADO"))
@@ -124,7 +139,10 @@ while true do
     term.setTextColor(colors.red)
     print("!!! SCRAM / BLOQUEADO !!!")
     print(locked)
-    if not scramOK then print("FALHA AO ENVIAR SCRAM!") end
+    if not scramOK then
+      print("SCRAM NAO CONFIRMADO!")
+      if scramError then print(scramError:sub(1,45)) end
+    end
     term.setTextColor(colors.white)
     print("Corrija a causa e reinicie o programa.")
   else
