@@ -1,14 +1,15 @@
--- Reator Seguro v1.2 - Minecraft 1.20.1 / Mekanism 10.4 / CC:Tweaked
--- Monitor de seguranca. NUNCA liga o reator automaticamente.
--- Requer um Fission Reactor Logic Adapter conectado ao computador.
--- Use um Logic Adapter independente de seguranca como protecao adicional.
+-- Reator Seguro v1.3 | Mekanism 1.20.1 / CC:Tweaked
+-- Protecao local + telemetria pelo modem, canal 42.
+-- NAO aceita comandos pela rede. NAO religa automaticamente.
+-- Mantenha um Logic Adapter independente para SCRAM fisico.
 
 local CFG = {
-  temp_max_c = 450,
-  coolant_min = 0.10, -- protecao inicial; 20% e o nivel observado no teste
-  heated_max = 0.90,
-  waste_max = 0.85,
-  interval = 0.2
+  maxTempC = 450,
+  minCoolant = 0.10,
+  maxHeated = 0.90,
+  maxWaste = 0.85,
+  period = 0.25,
+  channel = 42
 }
 
 local function findReactor()
@@ -17,76 +18,102 @@ local function findReactor()
   for _, name in ipairs(peripheral.getNames()) do
     local dev = peripheral.wrap(name)
     if dev and type(dev.getTemperature) == "function"
-       and type(dev.getCoolantFilledPercentage) == "function"
-       and type(dev.scram) == "function" then
+      and type(dev.getCoolantFilledPercentage) == "function"
+      and type(dev.scram) == "function" then
       return dev
     end
   end
   return nil
 end
 
-local reactor = findReactor()
-if not reactor then
-  error("Reator nao encontrado. Verifique o Logic Adapter e o cabo/modem.", 0)
+local r = findReactor()
+if not r then
+  error("Logic Adapter nao encontrado; confira a conexao do computador.", 0)
 end
 
-local function number(value, label)
-  if type(value) ~= "number" or value ~= value then
+local modem = peripheral.find("modem")
+local locked, data, scramConfirmed = nil, nil, true
+local scramError = nil
+
+local function validNumber(x, label)
+  if type(x) ~= "number" or x ~= x then
     error("Leitura invalida: " .. label, 0)
   end
-  return value
+  return x
 end
 
--- As porcentagens de enchimento do Mekanism variam de 0 a 1.
--- getDamagePercent() ja retorna a porcentagem, e nao uma fracao.
 local function read()
   local d = {}
-  d.on = reactor.getStatus()
-  if type(d.on) ~= "boolean" then error("Status invalido", 0) end
-  d.temp_c = number(reactor.getTemperature(), "temperatura") - 273.15
-  d.coolant = number(reactor.getCoolantFilledPercentage(), "sodio")
-  d.heated = number(reactor.getHeatedCoolantFilledPercentage(), "sodio quente")
-  d.waste = number(reactor.getWasteFilledPercentage(), "residuo")
-  d.damage = number(reactor.getDamagePercent(), "dano")
-  d.burn = number(reactor.getBurnRate(), "burn rate")
-  d.heating = number(reactor.getHeatingRate(), "heating rate")
-
-  for _, key in ipairs({"coolant", "heated", "waste"}) do
-    if d[key] < 0 or d[key] > 1 then
-      error("Porcentagem fora da faixa: " .. key, 0)
-    end
+  d.active = r.getStatus()
+  if type(d.active) ~= "boolean" then error("Status invalido", 0) end
+  d.tempC = validNumber(r.getTemperature(), "temperatura") - 273.15
+  d.coolant = validNumber(r.getCoolantFilledPercentage(), "sodio")
+  d.heated = validNumber(r.getHeatedCoolantFilledPercentage(), "sodio quente")
+  d.waste = validNumber(r.getWasteFilledPercentage(), "residuo")
+  d.damage = validNumber(r.getDamagePercent(), "dano")
+  d.burn = validNumber(r.getBurnRate(), "queima")
+  d.heating = validNumber(r.getHeatingRate(), "aquecimento")
+  for _, k in ipairs({"coolant", "heated", "waste"}) do
+    if d[k] < 0 or d[k] > 1 then error("Nivel invalido: " .. k, 0) end
   end
   return d
 end
 
-local function unsafeReason(d)
+local function reason(d)
   if d.damage > 0 then return "DANO NO REATOR" end
-  if d.temp_c >= CFG.temp_max_c then return "TEMPERATURA ALTA" end
-  if d.coolant < CFG.coolant_min then return "SODIO INSUFICIENTE" end
-  if d.heated >= CFG.heated_max then return "SODIO QUENTE ACUMULADO" end
-  if d.waste >= CFG.waste_max then return "RESIDUO NUCLEAR ALTO" end
+  if d.tempC >= CFG.maxTempC then return "TEMPERATURA ALTA" end
+  if d.coolant < CFG.minCoolant then return "SODIO INSUFICIENTE" end
+  if d.heated >= CFG.maxHeated then return "SODIO QUENTE ACUMULADO" end
+  if d.waste >= CFG.maxWaste then return "RESIDUO NUCLEAR ALTO" end
   return nil
 end
 
-local function log(reason)
-  local ok = pcall(function()
-    local file = fs.open("reator_eventos.log", "a")
-    if file then
-      file.writeLine("Dia " .. tostring(os.day()) .. " " ..
-        textutils.formatTime(os.time(), true) .. " | " .. tostring(reason))
-      file.close()
+local function log(text)
+  pcall(function()
+    local f = fs.open("reator_eventos.log", "a")
+    if f then
+      f.writeLine("Dia " .. os.day() .. " " ..
+        textutils.formatTime(os.time(), true) .. ": " .. tostring(text))
+      f.close()
     end
   end)
 end
 
-local locked, data, scramOK, scramError = nil, nil, true, nil
+local function shutdown()
+  if data and not data.active then
+    scramConfirmed, scramError = true, nil
+    return
+  end
+  local ok, err = pcall(function() r.scram() end)
+  if ok then
+    scramConfirmed, scramError = true, nil
+  else
+    local statusOK, status = pcall(function() return r.getStatus() end)
+    scramConfirmed = statusOK and status == false
+    scramError = scramConfirmed and nil or tostring(err)
+  end
+end
+
+local function transmit()
+  if not modem then return end
+  local packet = {
+    kind = "mek_fission_telemetry_v1",
+    source = os.getComputerID(),
+    state = locked and "BLOQUEADO" or "MONITORANDO",
+    reason = locked,
+    scramConfirmed = scramConfirmed,
+    error = scramError,
+    data = data
+  }
+  pcall(function() modem.transmit(CFG.channel, CFG.channel, packet) end)
+end
 
 while true do
   local ok, result = pcall(read)
   if ok then
     data = result
     if not locked then
-      locked = unsafeReason(data)
+      locked = reason(data)
       if locked then log(locked) end
     end
   else
@@ -97,60 +124,39 @@ while true do
     end
   end
 
-  -- O comando scram() do Mekanism falha quando o reator JA esta desligado.
-  -- Evita o falso aviso de falha nesses casos.
-  if locked then
-    scramError = nil
-    if data and not data.on then
-      scramOK = true
-    else
-      local sent, err = pcall(function() reactor.scram() end)
-      if sent then
-        scramOK = true
-      else
-        -- Caso tenha desligado entre a leitura e o comando, confirmar o estado.
-        local statusOK, status = pcall(function() return reactor.getStatus() end)
-        scramOK = statusOK and status == false
-        if not scramOK then scramError = tostring(err) end
-      end
-    end
-  end
+  if locked then shutdown() end
+  transmit()
 
   term.setBackgroundColor(colors.black)
   term.setTextColor(colors.white)
   term.clear()
   term.setCursorPos(1, 1)
-  print("=== REATOR SEGURO v1.2 ===")
-
+  print("=== REATOR SEGURO v1.3 ===")
   if data then
-    print("Estado: " .. (data.on and "LIGADO" or "DESLIGADO"))
+    print("Estado: " .. (data.active and "LIGADO" or "DESLIGADO"))
     print(string.format("Queima: %.2f mB/t", data.burn))
     print(string.format("Aquecimento: %.0f mB/t", data.heating))
-    print(string.format("Temperatura: %.2f C", data.temp_c))
-    print(string.format("Sodio: %.1f%%", data.coolant * 100))
-    print(string.format("Sodio quente: %.1f%%", data.heated * 100))
-    print(string.format("Residuo: %.1f%%", data.waste * 100))
+    print(string.format("Temperatura: %.2f C", data.tempC))
+    print(string.format("Sodio: %.1f%%", 100 * data.coolant))
+    print(string.format("Sodio quente: %.1f%%", 100 * data.heated))
+    print(string.format("Residuo: %.1f%%", 100 * data.waste))
     print(string.format("Dano: %.2f%%", data.damage))
   else
-    print("Falha ao consultar o reator.")
+    print("Leitura do reator indisponivel.")
   end
-
   if locked then
     term.setTextColor(colors.red)
     print("!!! SCRAM / BLOQUEADO !!!")
     print(locked)
-    if not scramOK then
-      print("SCRAM NAO CONFIRMADO!")
-      if scramError then print(scramError:sub(1,45)) end
+    if not scramConfirmed then
+      print("SCRAM NAO CONFIRMADO")
+      print(tostring(scramError or "Verifique o reator"):sub(1,42))
     end
-    term.setTextColor(colors.white)
-    print("Corrija a causa e reinicie o programa.")
   else
     term.setTextColor(colors.lime)
     print("MONITORAMENTO ATIVO")
-    term.setTextColor(colors.white)
-    print("Nao liga nem altera a queima.")
   end
-
-  sleep(CFG.interval)
+  term.setTextColor(colors.white)
+  print(modem and "Modem: transmitindo canal 42" or "SEM MODEM: rede indisponivel")
+  sleep(CFG.period)
 end
