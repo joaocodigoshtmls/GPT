@@ -122,16 +122,21 @@ end
 local test = mode == "teste" and newTest() or nil
 local data, confirmed, warning, trend, modem
 local window, previous = {}, nil
+local samples, risingSince = {}, nil
 local function sameRate(a, b)
   return math.abs(a - b) < 0.000001
 end
 
 local function updateTrend(now)
   trend = nil
-  if not data or not data.active then window = {} return end
+  if not data then window = {} return end
   local sample = {time = now, temp = data.tempC, level = data.coolant}
   local tail = window[#window]
-  if not tail or now - tail.time >= 1 then window[#window+1] = sample end
+  if not tail or now - tail.time >= 1 then
+    window[#window+1] = sample
+    samples[#samples+1] = {utc = os.epoch("utc"), data = data}
+    while #samples > 31 do table.remove(samples, 1) end
+  end
   while #window > 1 and window[2].time <= now - 30 do table.remove(window, 1) end
   local base = window[1]
   if now - base.time >= 30 then
@@ -201,14 +206,36 @@ local function poll()
   local now = os.clock()
   local gap = previous and now - previous > 2
   previous = now
-  if gap then window = {} end
+  if gap then window, samples, risingSince = {}, {}, nil end
   if not r then r = findReactor() end
   local ok, result = pcall(read)
   data = ok and result or nil
+  updateTrend(now)
   local fault
-  if ok then fault = reason(data) else fault = "FALHA DE LEITURA: " .. tostring(result) end
+  if ok then
+    fault = reason(data)
+    if data.active then
+      if mode == "normal" and not approved then
+        fault = fault or "SEM TAXA APROVADA"
+      elseif mode == "normal" and data.burn > approved.target + 0.000001 then
+        fault = fault or "QUEIMA ACIMA DA APROVADA"
+      elseif mode == "teste" and data.burn > target + 0.000001 then
+        fault = fault or "QUEIMA ACIMA DO TESTE"
+      end
+      if trend and trend.sodium <= -0.5 and trend.temp >= 0.25 then
+        risingSince = risingSince or now
+        if now - risingSince >= 5 then fault = fault or "SODIO CAINDO E TEMP SUBINDO" end
+      else
+        risingSince = nil
+      end
+    else
+      risingSince = nil
+    end
+  else
+    fault = "FALHA DE LEITURA: " .. tostring(result)
+  end
   if fault and not lock then
-    lock = {reason = fault, utc = os.epoch("utc"), data = data}
+    lock = {reason = fault, utc = os.epoch("utc"), data = data, history = samples}
     saved = false
   end
   if lock then
@@ -221,8 +248,15 @@ local function poll()
     end
   end
   if not ok then r = nil end
-  updateTrend(now)
   updateTest(now, gap)
+  if test and test.phase == "INTERROMPIDO" and not lock and data and data.active then
+    lock = {reason = "TESTE: " .. tostring(test.reason), utc = os.epoch("utc"),
+      data = data, history = samples}
+    confirmed = enforce()
+    saved = pcall(writeRecord, LOCK, lock, false)
+    if not saved then diskError = "FALHA AO SALVAR BLOQUEIO" end
+    if not pcall(logLine, textutils.serializeJSON(lock)) then diskError = "FALHA NO LOG" end
+  end
   warning = trendAlert()
   if data and data.fuel < 0.10 then warning = warning or "COMBUSTIVEL BAIXO" end
   if mode == "normal" and data then
@@ -235,7 +269,9 @@ local function poll()
     mode = mode, state = lock and "BLOQUEADO" or "MONITORANDO", reason = lock and lock.reason,
     trip = lock, scramConfirmed = confirmed, data = data, trial = test, trend = trend,
     reference = approved and {target = approved.target, supply = approved.supply},
-    warning = warning, diskError = diskError}
+    warning = warning, diskError = diskError,
+    cooling = lock and data and not data.active and
+      (trend and (trend.temp > 0.25 and "TEMP SUBINDO" or "ACOMPANHANDO RESFRIAMENTO") or "CALCULANDO") or nil}
   if not modem then modem = peripheral.find("modem") end
   if modem and not pcall(modem.transmit, CFG.channel, CFG.channel, packet) then modem = nil end
 
@@ -255,6 +291,7 @@ local function poll()
     term.setTextColor(colors.red)
     print(lock.reason)
     print(confirmed and "DESLIGAMENTO CONFIRMADO" or "SCRAM NAO CONFIRMADO")
+    if trend and data and not data.active then print(trend.temp > 0.25 and "TEMP SUBINDO" or "ACOMPANHANDO RESFRIAMENTO") end
     if lock.data then print(string.format("Sodio no disparo %.2f%%", 100*lock.data.coolant)) end
     print("U: liberar apos revisar a causa")
   else
@@ -296,6 +333,6 @@ while true do
     mode, test = "normal", nil
   elseif event == "key" and id == keys.r and test and test.finished and not lock then
     test = newTest()
-    window = {}
+    window, samples = {}, {}
   end
 end
