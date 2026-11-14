@@ -90,7 +90,8 @@ local function details(p)
     local trip = (p.trip and p.trip.data) or {}
     table.insert(sections, 1, {"DISPARO DO SCRAM", {
       {"Sodio no disparo", pct(trip.coolant)}, {"Sodio agora", pct(d.coolant)},
-      {"Temp. no disparo", fmt(trip.tempC, "%.2f C")}, {"Queima real", fmt(trip.actual, "%.2f mB/t")}}})
+      {"Temp. no disparo", fmt(trip.tempC, "%.2f C")}, {"Queima real", fmt(trip.actual, "%.2f mB/t")},
+      {"Apos SCRAM", p.cooling or "SEM DADOS"}}})
   end
   return sections
 end
