@@ -4,6 +4,78 @@ Controlador em Lua para Mekanism 10.4 e CC: Tweaked. Você escolhe o **burn rate
 
 **Esta versão foi verificada com simulações de Lua e periféricos substitutos; ainda não foi executada em um mundo Minecraft. Faça o primeiro ensaio em uma cópia do mundo, acompanhado.** Um teste mede estabilidade durante uma janela finita; não comprova funcionamento indefinido nem impede uma explosão em qualquer circunstância.
 
+## Revisão auto-v2.2 e diagnóstico
+
+Corrigida a regressão final com intervalos irregulares: a última leitura da medição agora entra no cálculo mesmo fora da cadência de amostragem. Antes, uma instalação estável podia receber SCRAM ao terminar o teste porque não existia uma janela completa calculável. A política mudou para `auto-v2.2`; referências anteriores precisam de ensaio completo.
+
+Testes interrompidos por bloqueio agora entram no arquivo de resultados, depois da solicitação de SCRAM. A recuperação de erro interno grava `/reator_erro.txt` e tenta transmitir o motivo sem reaproveitar sensores antigos. Controlador e painel usam todos os modems visíveis; o painel desenha em todos os monitores encontrados. Isso evita depender da ordem de descoberta dos modems. Os modems precisam compartilhar uma rede compatível: um modem cabeado sozinho não alcança um computador ligado apenas por rádio.
+
+### Computador do reator: verificar antes de operar
+
+Com o **reator desligado manualmente**, antes de iniciar o controlador, execute em uma pasta nova:
+
+```text
+mkdir /reator_v22
+cd /reator_v22
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/verificar_reator.lua verificar_reator.lua
+verificar_reator
+```
+
+A verificação somente lê: lista os periféricos, os métodos disponíveis, os valores e o tempo das chamadas em `/verificacao_reator.txt`. Não liga, não altera a queima e não envia SCRAM. Não a use para substituir o controlador durante operação. Métodos ausentes ou erros precisam ser investigados antes do ensaio. `_HOST` ajuda a identificar o CC:Tweaked; as versões de Forge, Mekanism, Mekanism Generators e addons devem ser consultadas na lista **Mods** ou nos nomes dos arquivos `.jar`. Minecraft 1.20.1 não determina essas versões.
+
+Depois, ainda com o reator desligado:
+
+```text
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/reator_core.lua reator_core.lua
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/reator_seguro.lua reator_seguro.lua
+id
+reator_seguro
+```
+
+Anote o ID exibido. Verifique as leituras e o bloqueio de inicialização; use **U** apenas após revisar as condições. O reator continua dependendo de ativação manual. O programa usa os arquivos de histórico/bloqueio na raiz, inclusive se estiver instalado em outra pasta. Preserve-os; criar uma pasta nova não elimina bloqueios.
+
+### Computador externo: painel e relatório
+
+Em uma pasta nova, substituindo `17` pelo ID anotado:
+
+```text
+mkdir /painel_v22
+cd /painel_v22
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/painel_reator.lua painel_reator.lua
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/relatorio_reator.lua relatorio_reator.lua
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/enviar_relatorio.lua enviar_relatorio.lua
+settings set reator.source 17
+painel_reator
+```
+
+Para coletar, encerre **somente o painel externo** com Ctrl+T e execute:
+
+```text
+relatorio_reator
+```
+
+Espere aparecer `Salvo: /relatorio_reator.txt`. Para publicar esse relatório:
+
+```text
+enviar_relatorio /relatorio_reator.txt
+```
+
+Esse comando envia o arquivo ao Pastebin e mostra os detalhes retornados por HTTP, também salvos em `/envio_reator.txt`. O `pastebin put` incluído no CC:Tweaked 1.20.x pode mostrar apenas `Failed.` ao falhar o POST: essa mensagem sozinha não identifica a causa. Não desabilite restrições HTTP nem troque configurações às cegas. O novo comando não tenta outro serviço automaticamente.
+
+Para publicar a verificação local, baixe `enviar_relatorio.lua` **no computador do reator, antes de iniciar o controlador**, e execute `enviar_relatorio /verificacao_reator.txt`. Ele também aceita explicitamente `/reator_erro.txt`. Cada execução publica somente o arquivo informado; trate os conteúdos e links como públicos.
+
+Se o envio continuar indisponível, em um mundo local os arquivos ficam normalmente em `saves/<mundo>/computercraft/computer/<ID>/`; em servidor, peça ao administrador o arquivo em `<pasta-do-mundo>/computercraft/computer/<ID>/`. Confirme a pasta real do mundo/instância. Copie o arquivo e anexe-o à conversa; não é preciso publicá-lo no Pastebin. Depois da coleta, reinicie o painel com `painel_reator` na pasta em que o instalou.
+
+### O que foi conferido e o que depende do jogo
+
+A documentação [Mekanism 10.4](https://mekanism.github.io/computer_data/10.4.0.html) e o [código 1.20.x consultado](https://github.com/mekanism/Mekanism/blob/96c736241e308a9cf1c73f7dcfa9aa221ea559d3/src/generators/java/mekanism/generators/common/content/fission/FissionReactorMultiblockData.java) confirmam os métodos usados, `getActualBurnRate` distinto de `getBurnRate`, níveis em frações e dano percentual arredondado. O [wrapper de temperatura](https://github.com/mekanism/Mekanism/blob/96c736241e308a9cf1c73f7dcfa9aa221ea559d3/src/main/java/mekanism/common/integration/computer/SpecialComputerMethodWrapper.java) retorna Kelvin; a subtração de 273,15 está correta. `getHeatingRate` é a quantidade de refrigerante aquecida no tick anterior, não uma potência térmica.
+
+As chamadas não marcadas como seguras para execução paralela passam pela thread principal do servidor no [adaptador CC](https://github.com/mekanism/Mekanism/blob/96c736241e308a9cf1c73f7dcfa9aa221ea559d3/src/main/java/mekanism/common/integration/computer/computercraft/CCMethodCaller.java). Várias chamadas sequenciais podem consumir vários ticks, e não formam uma leitura atômica. A comparação de estado/taxa no fim reduz inconsistências, mas não detecta toda mudança intermediária. Os limites de dois segundos continuam conservadores: servidor lento pode causar SCRAM; não os aumente sem medir a latência e rever a proteção.
+
+Foram mantidos 60 s de tendência, 120 s de estabilidade, 600 s de medição e validade de seis horas. A soma de 780 s é um mínimo aproximado, acrescido do tempo entre leituras. Esses tempos são critérios de observação, não parâmetros oficiais de segurança nem uma comprovação de capacidade sustentável. Seis horas limitam a idade da referência; não garantem que as condições permaneçam iguais nesse período. Reservas externas grandes e ciclos mais longos exigem observação adicional. A reconferência e as proteções contínuas continuam obrigatórias. Limites de tendências são estritos e podem rejeitar alimentação em pulsos; não foram afrouxados sem dados da instalação.
+
+Ainda falta confirmar as versões instaladas, a configuração de integração, os métodos visíveis, a topologia dos modems e o comportamento dentro do Minecraft. Os testes simulados não provam ausência de explosões.
+
 ## Instalação e primeira execução
 
 1. Desligue o reator no jogo antes de substituir programas. Mantenha funcionando o resfriamento e a extração dos produtos após o desligamento.
@@ -133,9 +205,11 @@ Sem bibliotecas externas, da raiz do repositório:
 ```bash
 lua minecraft/mekanism/tests/test_core.lua
 lua minecraft/mekanism/tests/test_runtime.lua
+lua minecraft/mekanism/tests/test_report.lua
+lua minecraft/mekanism/tests/test_tools.lua
 ```
 
-Também funciona com `luatex --luaonly` no lugar de `lua`. O primeiro testa a lógica com relógios e trajetórias de sensores simulados; o segundo executa os programas completos com periféricos, eventos e arquivos substitutos. Não substituem um ensaio de integração no Minecraft.
+Também funciona com `luatex --luaonly` no lugar de `lua`. O primeiro testa a lógica com relógios e trajetórias de sensores simulados; os demais executam os programas com periféricos, eventos, HTTP e arquivos substitutos. Não substituem um ensaio de integração no Minecraft.
 
 Referências primárias: [API do Mekanism 10.4](https://mekanism.github.io/computer_data/10.4.0.html), [eventos e relógios do CC: Tweaked](https://tweaked.cc/module/os.html), [periféricos do CC: Tweaked](https://tweaked.cc/module/peripheral.html).
 

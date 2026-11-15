@@ -3,11 +3,19 @@
 local DIR = fs.getDir(shell.getRunningProgram())
 local DB, LOCK, RESULTS = "/reator_auto_v2.json", "/reator_scram.json", "/reator_testes_v2.jsonl"
 local CHANNEL = 42
-local r, reactorName, engine, Core, data, modem
+local r, reactorName, engine, Core, data
 local signature, signatureAt, lastRead, confirmed, diskError, uiError
 local sequence, lastPublish, lastLockSave, lastResult = 0, -math.huge, -math.huge, nil
 local startupFault, binding, epoch = nil, nil, tostring(os.epoch("utc"))
 local savedLock
+local function transmit(packet)
+  -- A wired modem to the reactor may be enumerated before the radio outside.
+  -- Send on every visible modem; failure of one must not suppress the others.
+  local ok, modems = pcall(function() return {peripheral.find("modem")} end)
+  if ok then
+    for _, m in ipairs(modems) do pcall(m.transmit, CHANNEL, CHANNEL, packet) end
+  end
+end
 local function candidates()
   local found = {}
   for _, name in ipairs(peripheral.getNames()) do
@@ -185,7 +193,7 @@ end
 local function publish(now)
   local t, s = engine.trial, engine.long or {}
   sequence = sequence+1
-  local packet = {kind = "mek_fission_telemetry_v2", edition = "bastiao-auto", source = os.getComputerID(),
+  local packet = {kind = "mek_fission_telemetry_v2", edition = "auto-v2.2", source = os.getComputerID(),
     session = epoch, sequence = sequence, utc = os.epoch("utc"), reactor = reactorName,
     mode = "auto", state = engine.phase, reason = engine.lock and engine.lock.reason,
     scramConfirmed = confirmed, data = data, trial = t, diskError = diskError, uiError = uiError,
@@ -206,7 +214,7 @@ local function publish(now)
       print(string.format("%.2f C | Frio %.3f%%", data.tempC, data.coolant*100))
       print(string.format("Quente %.3f%% | Residuo %.3f%%", data.heated*100, data.waste*100))
     end
-    if t then print(string.format("Estabiliza %d/%ds | Teste %d/%ds", t.settle or 0, Core.cfg.stabilize, t.elapsed, Core.cfg.duration)) end
+    if t then print(string.format("Estabiliza %.0f/%ds | Teste %.0f/%ds", t.settle or 0, Core.cfg.stabilize, t.elapsed, Core.cfg.duration)) end
     if engine.lock then
       term.setTextColor(colors.red)
       print(engine.lock.reason)
@@ -217,9 +225,7 @@ local function publish(now)
     if diskError then print(diskError) end
   end)
   uiError = not ok and tostring(err) or nil -- UI failure cannot terminate supervision.
-  local connected, p = pcall(peripheral.find, "modem")
-  modem = connected and p or nil
-  if modem then pcall(modem.transmit, CHANNEL, CHANNEL, packet) end
+  transmit(packet)
   lastPublish = now
 end
 local function poll()
@@ -244,8 +250,10 @@ local function poll()
       if saved and dbSaved then savedLock = engine.lock end
       lastLockSave = now
     end
-  elseif engine.result and engine.result ~= lastResult then
-    local saved = pcall(saveDB)
+  end
+  -- Interrupted tests need a log too. SCRAM above always precedes disk I/O.
+  if engine.result and engine.result ~= lastResult then
+    local saved = engine.lock ~= nil or pcall(saveDB)
     local logged = pcall(appendResult, engine.result)
     lastResult = engine.result
     if not saved or not logged then diskError = "FALHA AO SALVAR TESTE" trip(diskError) end
@@ -306,6 +314,21 @@ if not ok then
   while true do
     confirmed = emergencyStop()
     pcall(atomicJSON, LOCK, {reason = "ERRO INTERNO: " .. err, utc = os.epoch("utc")})
+    -- Keep the original failure available locally and in passive diagnostics,
+    -- even if the core could not load. Never send a stale sensor snapshot.
+    pcall(function()
+      local f = assert(fs.open("/reator_erro.txt", "w"))
+      f.write("ERRO INTERNO: " .. err .. "\n_HOST: " .. tostring(_HOST) ..
+        "\nAdaptador: " .. tostring(reactorName) .. "\nUTC: " .. os.epoch("utc"))
+      f.close()
+    end)
+    pcall(function()
+      sequence = sequence+1
+      transmit({kind = "mek_fission_telemetry_v2", edition = "auto-v2.2",
+        source = os.getComputerID(), session = epoch, sequence = sequence, utc = os.epoch("utc"),
+        reactor = reactorName, mode = "auto", state = "BLOQUEADO", reason = "ERRO INTERNO: " .. err,
+        scramConfirmed = confirmed, duration = 600, stabilize = 120})
+    end)
     pcall(function()
       term.setTextColor(colors.red)
       print("ERRO INTERNO: " .. err)

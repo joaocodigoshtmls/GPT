@@ -1,6 +1,6 @@
 -- Pure evaluation logic. No peripherals, filesystem, networking or activation.
 local M = {}
-M.policy = "auto-v2.1"
+M.policy = "auto-v2.2"
 M.cfg = {
   period = 0.25, maxGap = 2, samplePeriod = 1,
   stabilize = 120, duration = 600, timeout = 1800,
@@ -218,7 +218,9 @@ function M.new(approvals)
       for _, k in ipairs(fields) do t.initial[k], t.min[k], t.max[k] = d[k], d[k], d[k] end
     end
     t.elapsed = math.min(C.duration, now-self.measureAt)
-    if not self.measureSampleAt or now-self.measureSampleAt >= C.samplePeriod then
+    -- Peripheral calls yield in the game, so the final poll rarely lands on
+    -- the sampling cadence. Include that endpoint before requiring a full span.
+    if not self.measureSampleAt or now-self.measureSampleAt >= C.samplePeriod or t.elapsed >= C.duration then
       local s = {t = now}
       for _, k in ipairs(fields) do s[k] = d[k] end
       self.measureSamples[#self.measureSamples+1], self.measureSampleAt = s, now

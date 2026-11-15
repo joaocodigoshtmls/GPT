@@ -1,7 +1,7 @@
 -- Read-only display. Pin the controller: settings set reator.source <computer ID>
 local CHANNEL, SCALE = 42, 0.5
 local expected = tonumber((...)) or settings.get("reator.source")
-local latest, received, modem, monitor, page = nil, nil, nil, nil, 1
+local latest, received, monitors, page = nil, nil, {}, 1
 local function finite(x) return type(x) == "number" and x == x and math.abs(x) < math.huge end
 local function accepts(p)
   if not finite(expected) or type(p) ~= "table" or p.kind ~= "mek_fission_telemetry_v2" or
@@ -131,14 +131,12 @@ local function draw(out)
 end
 local function redraw()
   pcall(draw, term)
-  if monitor then pcall(draw, monitor) end
+  for _, monitor in ipairs(monitors) do pcall(draw, monitor) end
 end
 local function discover()
-  modem = peripheral.find("modem")
-  if modem then pcall(modem.open, CHANNEL) end
-  local found = peripheral.find("monitor")
-  if found then pcall(found.setTextScale, SCALE) end
-  monitor = found
+  for _, modem in ipairs({peripheral.find("modem")}) do pcall(modem.open, CHANNEL) end
+  monitors = {peripheral.find("monitor")}
+  for _, monitor in ipairs(monitors) do pcall(monitor.setTextScale, SCALE) end
 end
 pcall(discover)
 redraw()

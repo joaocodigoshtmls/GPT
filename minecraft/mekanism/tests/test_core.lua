@@ -209,4 +209,15 @@ test('corrupt persisted evidence cannot become a cached approval',function()
     assert(not Core.validApproval(a,d,1000000),kind)
   end
 end)
+test('irregular peripheral timing includes final measurement endpoint',function()
+  local e,d=Core.new(),data()
+  local now=0
+  for i=1,4000 do
+    now=now+({.31,.44,.53,.28,.39})[(i-1)%5+1]
+    e:step(d,now,1000000+now*1000)
+    assert(not e.lock,e.lock and e.lock.reason)
+  end
+  assert(e.phase=='APROVADO' and math.abs(e.result.slopes.tempC)<1e-10)
+  assert(e.result.sampleCount>=300 and e.result.elapsed==600)
+end)
 print(string.format('%d core scenarios passed',passed))

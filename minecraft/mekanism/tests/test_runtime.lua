@@ -8,7 +8,7 @@ end
 local function harness(opts)
   opts = opts or {}
   local h = {time=0, utc=1000000, files={}, packets={}, lines={}, stops=0,
-    active=opts.active~=false, rate=1, actual=1, coolant=.8, present=true, damage=0, timers=0}
+    opened={}, active=opts.active~=false, rate=1, actual=1, coolant=.8, present=true, damage=0, timers=0}
   local tokens, tokenID = {}, 0
   local env = setmetatable({}, {__index=_G})
   env.os = {clock=function() return h.time end, epoch=function() return h.utc end,
@@ -60,11 +60,16 @@ local function harness(opts)
   local modem={transmit=function(_,_,packet)
     if h.breakModem then error('modem broken') end
     h.packets[#h.packets+1]=clone(packet)
-  end,open=function() end}
+  end,open=function() h.opened.good=true end}
+  local firstModem={transmit=function() error('first modem failed') end,
+    open=function() h.opened.first=true end}
   env.peripheral={getNames=function() return h.present and {'reactor_0'} or {} end,
     wrap=function(name) if h.present and name=='reactor_0' then return p end end,
     isPresent=function(name) return h.present and name=='reactor_0' end,
-    find=function(kind) if kind=='modem' then return modem end end}
+    find=function(kind) if kind=='modem' then
+      if opts.multiModems then return firstModem,modem end
+      return modem
+    end end}
   env.dofile=function(path)
     if h.missingCore then error('module missing') end
     return assert(hostLoad(path,'t',env))()
@@ -220,5 +225,29 @@ test('display requires controller selection and rejects malformed or stale packe
   assert(not table.concat(h.lines,' ',before):find('BAD_ACCEPTED'))
   h:tick(20)
   assert(table.concat(h.lines,' '):find('SEM TELEMETRIA ATUAL'))
+end)
+test('interrupted measurement is logged after SCRAM',function()
+  local h=harness() h:boot() h:release() h.active=true h:tick(1000)
+  assert(h:last().state=='MEDINDO')
+  h.damage=1 h:tick(8)
+  assert(not h.active and h.files['/reator_testes_v2.jsonl'])
+  local row=h.files['/reator_testes_v2.jsonl']:match('([^\n]+)\n$')
+  local result=h:read('/reator_scram.json')
+  assert(result.reason=='DANO NO REATOR')
+  h.files['/last-result']=row
+  assert(h:read('/last-result').phase=='INTERROMPIDO')
+end)
+test('core load failure is saved and transmitted without stale readings',function()
+  local h=harness() h.missingCore=true h:boot()
+  local p=h:last()
+  assert(p.state=='BLOQUEADO' and p.reason:find('module missing') and p.data==nil)
+  assert(p.scramConfirmed and not h.active)
+  assert(h.files['/reator_erro.txt']:find('module missing'))
+end)
+test('all modems are used even when the first transmit fails',function()
+  local h=harness({multiModems=true}) h:boot()
+  assert(h:last().state=='BLOQUEADO')
+  local panel=harness({source=17,multiModems=true}) panel:boot(true)
+  assert(panel.opened.first and panel.opened.good)
 end)
 print(total..' runtime scenarios passed')
