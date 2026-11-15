@@ -285,9 +285,9 @@ local function run()
   local timer = os.startTimer(Core.cfg.period)
   while true do
     local event, id = os.pullEventRaw()
+    local handled = true
     if event == "timer" and id == timer then
       poll()
-      timer = os.startTimer(Core.cfg.period)
     elseif event == "terminate" then
       trip("ENCERRAMENTO SOLICITADO (CTRL+T)")
       poll() -- Keep enforcing SCRAM; do not exit while status cannot be confirmed.
@@ -305,6 +305,15 @@ local function run()
     elseif event == "peripheral_detach" and id == reactorName then
       trip("ADAPTADOR DESCONECTADO")
       poll()
+    else
+      handled = false
+    end
+    if handled then
+      -- Peripheral calls yield and may consume the old timer while waiting.
+      -- Every action that can read/control the reactor must rearm polling,
+      -- including a denied U. Unrelated events must not postpone protection.
+      os.cancelTimer(timer)
+      timer = os.startTimer(Core.cfg.period)
     end
   end
 end

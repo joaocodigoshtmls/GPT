@@ -14,6 +14,7 @@ local function harness(opts)
   env.os = {clock=function() return h.time end, epoch=function() return h.utc end,
     getComputerID=function() return 17 end,
     startTimer=function() h.timers=h.timers+1 return h.timers end,
+    cancelTimer=function() end,
     pullEventRaw=function() return coroutine.yield('event') end,
     pullEvent=function() return coroutine.yield('event') end}
   env.print=function(s) h.lines[#h.lines+1]=tostring(s) end
@@ -50,6 +51,11 @@ local function harness(opts)
     getCoolantFilledPercentage=function() if h.failRead then error('disconnected') end return h.coolant end,
     getHeatedCoolantFilledPercentage=function() return .1 end,getWasteFilledPercentage=function() return .1 end,
     getFuelFilledPercentage=function() return .8 end,getHeatingRate=function()
+      if h.yieldReads and h.yieldReads>0 then
+        h.yieldReads=h.yieldReads-1
+        repeat local event=coroutine.yield('peripheral_result') until event=='peripheral_result'
+        h.time,h.utc=h.time+.35,h.utc+350
+      end
       if h.readDelay then h.time=h.time+h.readDelay h.utc=h.utc+h.readDelay*1000 end
       if h.changeDuringRead then h.rate=h.rate+1 end
       return 100
@@ -249,5 +255,35 @@ test('all modems are used even when the first transmit fails',function()
   assert(h:last().state=='BLOQUEADO')
   local panel=harness({source=17,multiModems=true}) panel:boot(true)
   assert(panel.opened.first and panel.opened.good)
+end)
+test('U rearms polling when a peripheral wait consumes the old timer',function()
+  for _, denied in ipairs({false,true}) do
+    local h=harness() h:boot()
+    local oldTimer=h.timers
+    if denied then h.coolant=.3 end
+    h.yieldReads=denied and 1 or 2
+    h:release() -- Suspended inside the release snapshot.
+    h:event('timer',oldTimer) -- Discarded while awaiting the peripheral result.
+    h:event('peripheral_result')
+    if not denied then h:event('peripheral_result') end
+    assert(h.timers>oldTimer,'no replacement polling timer after U')
+    h:tick(8)
+    assert(h:last().state==(denied and 'BLOQUEADO' or 'AGUARDANDO'))
+  end
+end)
+test('S R and terminate rearm polling after peripheral waits',function()
+  for _, event in ipairs({{'key',31},{'key',19},{'terminate'}}) do
+    local h=harness() h:boot() h:release() h.active=true h:tick(8)
+    local oldTimer=h.timers
+    h.yieldReads=1
+    h:event(table.unpack(event))
+    h:event('timer',oldTimer)
+    h:event('peripheral_result')
+    assert(h.timers>oldTimer,'no replacement timer after '..event[1])
+    local before=#h.packets
+    h:tick(8)
+    assert(#h.packets>before)
+    if event[2]~=19 then assert(not h.active and h:last().state=='BLOQUEADO') end
+  end
 end)
 print(total..' runtime scenarios passed')

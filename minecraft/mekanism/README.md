@@ -4,6 +4,21 @@ Controlador em Lua para Mekanism 10.4 e CC: Tweaked. Você escolhe o **burn rate
 
 **Esta versão foi verificada com simulações de Lua e periféricos substitutos; ainda não foi executada em um mundo Minecraft. Faça o primeiro ensaio em uma cópia do mundo, acompanhado.** Um teste mede estabilidade durante uma janela finita; não comprova funcionamento indefinido nem impede uma explosão em qualquer circunstância.
 
+## Correção do travamento ao pressionar U
+
+Uma chamada ao periférico pode aguardar o resultado e descartar o evento do temporizador que vence nesse intervalo. Antes desta correção, o tratamento de U fazia leituras, mas não reagendava o temporizador. O controlador podia parar de atualizar/proteger/transmitir, deixando o painel sem telemetria. O mesmo risco existia em outras ações fora do tratamento do temporizador.
+
+O controlador agora cancela o temporizador antigo e agenda outro após cada ação atendida (inclusive U recusado, S, R, Ctrl+T e desconexão). Eventos sem relação com o controle não adiam a próxima leitura. Os testes novos simulam uma chamada suspensa que descarta o temporizador; o teste de U falha antes da correção e passa depois. Não houve mudança nos limites nem nos critérios de estabilidade.
+
+Para atualizar esta correção, desligue o reator manualmente e mantenha o resfriamento/extração. No computador do reator, se o controlador estiver preso, segure Ctrl+R para reiniciar o computador. No terminal, execute:
+
+```text
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/reator_seguro.lua /reator_v22/reator_seguro_u.lua
+/reator_v22/reator_seguro_u.lua
+```
+
+O arquivo `reator_core.lua` deve continuar na mesma pasta. O nome novo preserva o controlador anterior. Se já existir `reator_seguro_u.lua`, preserve essa cópia antes de baixar uma revisão nova. Se usar startup, ajuste posteriormente o caminho para a versão corrigida. Com o reator desligado, pressione U e verifique se o painel muda para AGUARDANDO e continua recebendo leituras por pelo menos 15 segundos. O programa do painel não precisa ser substituído para esta correção. A validação continua sendo simulada; ainda é necessário conferir no jogo.
+
 ## Revisão auto-v2.2 e diagnóstico
 
 Corrigida a regressão final com intervalos irregulares: a última leitura da medição agora entra no cálculo mesmo fora da cadência de amostragem. Antes, uma instalação estável podia receber SCRAM ao terminar o teste porque não existia uma janela completa calculável. A política mudou para `auto-v2.2`; referências anteriores precisam de ensaio completo.
