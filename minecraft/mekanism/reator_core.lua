@@ -1,6 +1,6 @@
 -- Pure evaluation logic. No peripherals, filesystem, networking or activation.
 local M = {}
-M.policy = "auto-v2.2"
+M.policy = "auto-v2.3"
 M.cfg = {
   period = 0.25, maxGap = 2, samplePeriod = 1,
   stabilize = 120, duration = 600, timeout = 1800,
@@ -113,7 +113,8 @@ function M.new(approvals)
   end
   function self:trip(reason, d, utc)
     if self.lock then return end
-    self.lock = {reason = reason, utc = utc, data = d}
+    self.lock = {reason = reason, utc = utc, data = d,
+      protection = {short = self.guardShort, long = self.guardLong}}
     self.approvals = {} -- A fault invalidates cached results for this installation.
     if self.trial and not self.trial.finished then
       self.trial.phase, self.trial.reason, self.trial.finished = "INTERROMPIDO", reason, utc
@@ -145,6 +146,7 @@ function M.new(approvals)
     end
     -- Protection trends survive rate changes and manual retests. Repeatedly
     -- selecting a new target cannot erase evidence of a failing cooling loop.
+    local previousGuard = self.guards[#self.guards]
     if not self.guardAt or now-self.guardAt >= C.samplePeriod then
       local sample = {t = now}
       for _, k in ipairs(fields) do sample[k] = d[k] end
@@ -155,8 +157,21 @@ function M.new(approvals)
     local prediction = predictive(d, self.guardShort or {})
     if prediction then self:trip(prediction, d, utc) return end
     local protection = self.guardLong or {}
+    local coolantSettling = false
     if protection.tempC then
-      if protection.coolant < -0.000002 then self:trip("RESERVA DE REFRIGERANTE DIMINUINDO", d, utc) return end
+      if protection.coolant < -0.000002 then
+        -- A filled external loop can temporarily draw coolant from the reactor.
+        -- Only defer this long-window trip while stabilizing, inside ALL start
+        -- margins, with a non-decreasing recent trend AND fresh tank reading.
+        -- No timed grace: continued depletion still trips; hard/predictive
+        -- limits above and full stability requirements below remain in force.
+        local recent = self.guardShort and self.guardShort.coolant
+        local last = previousGuard
+        coolantSettling = (self.phase == "ESTABILIZANDO" or self.phase == "REVALIDANDO") and
+          not M.startFault(d) and recent and recent >= -1e-12 and
+          last and d.coolant >= last.coolant-1e-12
+        if not coolantSettling then self:trip("RESERVA DE REFRIGERANTE DIMINUINDO", d, utc) return end
+      end
       if protection.heated > 0.000002 then self:trip("SAIDA DE REFRIGERANTE INSUFICIENTE", d, utc) return end
       if protection.waste > 0.000002 then self:trip("EXTRACAO DE RESIDUO INSUFICIENTE", d, utc) return end
     end
@@ -204,6 +219,7 @@ function M.new(approvals)
     local t = self.trial
     if self.phase ~= "MEDINDO" then
       self.phase = self.cached and "REVALIDANDO" or "ESTABILIZANDO"
+      t.reason = coolantSettling and "AGUARDANDO REEQUILIBRIO DO REFRIGERANTE" or nil
       if stable(l) and stable(self.short) then self.ready = self.ready or now else self.ready = nil end
       t.settle = self.ready and now-self.ready or 0
       if t.settle < C.stabilize then t.phase = self.phase return end

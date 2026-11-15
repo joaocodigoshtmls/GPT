@@ -181,7 +181,7 @@ local function boot()
   confirmed = emergencyStop()
 end
 local function estimates()
-  local s, d, eta = engine.short or {}, data, {}
+  local s, d, eta = engine.guardShort or engine.short or {}, data, {}
   if not d then return eta end
   for _, spec in ipairs({{"coolant", Core.cfg.minCoolant, -1}, {"heated", Core.cfg.maxHeated, 1},
     {"waste", Core.cfg.maxWaste, 1}, {"fuel", Core.cfg.minFuel, -1}, {"tempC", Core.cfg.maxTempC, 1}}) do
@@ -191,9 +191,9 @@ local function estimates()
   return eta
 end
 local function publish(now)
-  local t, s = engine.trial, engine.long or {}
+  local t, s = engine.trial, (engine.lock and engine.guardLong or engine.long) or {}
   sequence = sequence+1
-  local packet = {kind = "mek_fission_telemetry_v2", edition = "auto-v2.2", source = os.getComputerID(),
+  local packet = {kind = "mek_fission_telemetry_v2", edition = "auto-v2.3", source = os.getComputerID(),
     session = epoch, sequence = sequence, utc = os.epoch("utc"), reactor = reactorName,
     mode = "auto", state = engine.phase, reason = engine.lock and engine.lock.reason,
     scramConfirmed = confirmed, data = data, trial = t, diskError = diskError, uiError = uiError,
@@ -333,7 +333,7 @@ if not ok then
     end)
     pcall(function()
       sequence = sequence+1
-      transmit({kind = "mek_fission_telemetry_v2", edition = "auto-v2.2",
+      transmit({kind = "mek_fission_telemetry_v2", edition = "auto-v2.3",
         source = os.getComputerID(), session = epoch, sequence = sequence, utc = os.epoch("utc"),
         reactor = reactorName, mode = "auto", state = "BLOQUEADO", reason = "ERRO INTERNO: " .. err,
         scramConfirmed = confirmed, duration = 600, stabilize = 120})

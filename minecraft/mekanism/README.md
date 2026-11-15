@@ -4,6 +4,27 @@ Controlador em Lua para Mekanism 10.4 e CC: Tweaked. Você escolhe o **burn rate
 
 **Esta versão foi verificada com simulações de Lua e periféricos substitutos; ainda não foi executada em um mundo Minecraft. Faça o primeiro ensaio em uma cópia do mundo, acompanhado.** Um teste mede estabilidade durante uma janela finita; não comprova funcionamento indefinido nem impede uma explosão em qualquer circunstância.
 
+## Revisão auto-v2.3: redistribuição inicial de refrigerante
+
+O estoque de sódio no reator pode cair ao preencher/aquecer o circuito e depois se recuperar ou estabilizar. Uma regressão de 60 segundos ainda pode apontar queda quando os últimos segundos já estão estáveis. A regra anterior disparava SCRAM por essa memória da queda, mesmo após a recuperação recente.
+
+Agora, **apenas em ESTABILIZANDO ou REVALIDANDO**, o disparo por queda do refrigerante frio na janela longa pode aguardar se todas as margens de início forem atendidas, a tendência recente de 10 segundos for não negativa (tolerância numérica de 1e-12 fração/s) e a leitura atual não mostrar nova queda desde a última amostra de proteção. Não é uma carência por tempo: se a queda ainda estiver ocorrendo quando a janela longa indicar perda, há SCRAM. Limites absolutos, previsão de chegada aos limites, demais tanques e o tempo máximo de estabilização continuam ativos.
+
+Isso não aprova o teste: as janelas de 10 e 60 segundos ainda precisam satisfazer a estabilidade durante 120 segundos antes dos 600 segundos de medição. Durante MEDINDO e APROVADO a exceção não se aplica. Um boiler grande não é, por si só, evidência suficiente de capacidade sustentável. Mudanças repetidas de taxa não apagam as amostras de proteção.
+
+O motivo `AGUARDANDO REEQUILIBRIO DO REFRIGERANTE` indica essa espera. Em um bloqueio, o painel usa as tendências da proteção que disparou; elas também ficam preservadas no campo `protection` de `/reator_scram.json`. A política passou a `auto-v2.3`, exigindo novo ensaio para referências anteriores. O protocolo do painel continua v2.
+
+Para instalar, mantenha o reator desligado e o circuito de resfriamento/extração funcionando. No computador do reator, segure Ctrl+R para reiniciar e, no terminal, use uma pasta nova:
+
+```text
+mkdir /reator_v23
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/reator_core.lua /reator_v23/reator_core.lua
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/reator_seguro.lua /reator_v23/reator_seguro.lua
+/reator_v23/reator_seguro.lua
+```
+
+Com o reator desligado, revise as leituras e pressione U no computador do reator. Aguarde AGUARDANDO e depois faça o ensaio acompanhado em uma cópia do mundo. O painel atual pode permanecer aberto. Preserve os arquivos de bloqueio/histórico; não os apague para contornar uma falha. Se usar startup, ajuste o caminho após conferir a nova instalação. O teste da redistribuição foi simulado; o comportamento específico da instalação precisa ser confirmado no jogo.
+
 ## Correção do travamento ao pressionar U
 
 Uma chamada ao periférico pode aguardar o resultado e descartar o evento do temporizador que vence nesse intervalo. Antes desta correção, o tratamento de U fazia leituras, mas não reagendava o temporizador. O controlador podia parar de atualizar/proteger/transmitir, deixando o painel sem telemetria. O mesmo risco existia em outras ações fora do tratamento do temporizador.
@@ -156,7 +177,7 @@ Estão centralizados em `reator_core.lua`. Não são limites oficiais universais
 | Combustível, com reator ativo | SCRAM abaixo de 10% | Pelo menos 25% |
 | Intervalo entre retratos completos | SCRAM acima de 2 s ou relógio retrocedendo | Leituras novas |
 
-A previsão conservadora solicita SCRAM se a tendência de 10 s indicar chegada a um desses limites nos próximos 60 s. Na janela de 60 s, perda de refrigerante ou acúmulo de quente/resíduo acima de 0,012 ponto percentual por minuto provoca SCRAM mesmo com temperatura estável.
+A previsão conservadora solicita SCRAM se a tendência de 10 s indicar chegada a um desses limites nos próximos 60 s. Na janela de 60 s, perda de refrigerante ou acúmulo de quente/resíduo acima de 0,012 ponto percentual por minuto provoca SCRAM mesmo com temperatura estável, com a exceção limitada para refrigerante frio descrita na revisão auto-v2.3.
 
 Para estabilidade, a subida de temperatura deve ser no máximo 0,6 °C/min e a tendência adversa de cada tanque no máximo 0,006 ponto percentual/min. Durante a medição completa, queda de refrigerante/combustível ou aumento de quente/resíduo acima de **0,05 ponto percentual** em relação ao início interrompe o teste. São margens estritas: instalações com alimentação em pulsos podem precisar de análise antes de ajustar a política.
 

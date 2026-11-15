@@ -286,4 +286,11 @@ test('S R and terminate rearm polling after peripheral waits',function()
     if event[2]~=19 then assert(not h.active and h:last().state=='BLOQUEADO') end
   end
 end)
+test('depletion trip preserves and displays protection trends',function()
+  local h=harness() h:boot() h:release() h.active=true
+  for i=1,260 do h.coolant=.8-i*.25*.00001 h:tick() end
+  local packet=h:last()
+  assert(packet.state=='BLOQUEADO' and packet.trend.sodium<0)
+  assert(h:read('/reator_scram.json').protection.long.coolant<0)
+end)
 print(total..' runtime scenarios passed')
