@@ -138,3 +138,26 @@ lua minecraft/mekanism/tests/test_runtime.lua
 Também funciona com `luatex --luaonly` no lugar de `lua`. O primeiro testa a lógica com relógios e trajetórias de sensores simulados; o segundo executa os programas completos com periféricos, eventos e arquivos substitutos. Não substituem um ensaio de integração no Minecraft.
 
 Referências primárias: [API do Mekanism 10.4](https://mekanism.github.io/computer_data/10.4.0.html), [eventos e relógios do CC: Tweaked](https://tweaked.cc/module/os.html), [periféricos do CC: Tweaked](https://tweaked.cc/module/peripheral.html).
+
+## Exportar um relatório para fora do jogo
+
+No **computador externo dos monitores**, encerre somente o painel com Ctrl+T. Mantenha o programa de controle no computador do reator funcionando. Baixe e execute o coletor:
+
+```text
+wget https://raw.githubusercontent.com/joaocodigoshtmls/GPT/codex/reator-auto-v2/minecraft/mekanism/relatorio_reator.lua relatorio_reator.lua
+relatorio_reator
+```
+
+Ele escuta a telemetria durante 60 segundos, gera `/relatorio_reator.txt` e mantém o relatório anterior em `.anterior`. Aceita os protocolos V1 e V2; não transmite comandos e não altera o reator. Se `reator.source` estiver configurado no computador, usa esse ID; sem a configuração, registra todos os controladores compatíveis no canal 42. Para escolher ID e duração explicitamente: `relatorio_reator 17 120`.
+
+O arquivo contém versão de protocolo, ID, estados, falhas transmitidas, leituras, progresso, tendências e horários de recepção. Não lê senhas, tokens ou arquivos pessoais. Também registra falta de modem/sinal e IDs diferentes do filtro. O relatório reproduz o que foi transmitido; se o controlador parou antes de transmitir seu erro, o erro interno não estará disponível por essa coleta. Nesse caso, também será necessário ler a mensagem da tela do computador do reator.
+
+Para **publicar o relatório no Pastebin e obter um link**, use o programa incluído no CC: Tweaked:
+
+```text
+pastebin put /relatorio_reator.txt
+```
+
+Esse último comando envia o conteúdo ao site; trate o link e o conteúdo como públicos. Ele requer HTTP habilitado e acesso ao Pastebin. Se falhar, o relatório continua salvo no computador do jogo; copie a mensagem do erro para investigar o acesso. A coleta não precisa de acesso à internet, apenas da ligação entre os modems.
+
+Depois volte ao painel com `painel_auto 17` (ou o nome real do seu programa), usando o ID correto. Este coletor foi verificado em sete cenários simulados; ainda precisa de ensaio no Minecraft.
